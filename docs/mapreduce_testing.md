@@ -1,55 +1,77 @@
 # Testing MapReduce Functionality
 
-This guide explains how to test the MapReduce functionality in our distributed file system.
+This guide explains how to test the MapReduce functionality in our distributed file system, including the shuffle phase. Instructions are provided for both localhost testing and distributed deployment on the Orion cluster.
 
 ## Prerequisites
 
 1. Make sure you have Go installed on your system
 2. Ensure all components are built
 
-## Step 1: Start the Controller
+## Building the Components
 
-First, start the controller node:
+First, build all the components:
 
 ```bash
+# Build the controller
 cd controller
 go build
-./controller
-```
 
-The controller should start and listen on port 8000 by default.
-
-## Step 2: Start the Computation Manager
-
-Next, start the computation manager:
-
-```bash
-cd computation
-go build
-./computation --controller localhost:8000
-```
-
-The computation manager should start and listen on port 8080 by default.
-
-## Step 3: Start Storage Nodes
-
-Start at least 3 storage nodes with different IDs:
-
-```bash
-cd storage
+# Build the computation manager
+cd ../computation
 go build
 
+# Build the storage nodes
+cd ../storage
+go build
+
+# Build the client
+cd ../client
+go build
+
+# Return to the root directory
+cd ..
+```
+
+## Option 1: Testing on Localhost
+
+This section provides detailed instructions for setting up and testing the MapReduce system on a single machine (localhost).
+
+### Step 1: Start the Controller
+
+Start the controller node:
+
+```bash
+./controller/controller -port 8000
+```
+
+The controller will start and listen on port 8000.
+
+### Step 2: Start the Computation Manager
+
+In a new terminal, start the computation manager:
+
+```bash
+./computation/computation -port 8080 -data computation_data -controller localhost:8000
+```
+
+The computation manager will start and listen on port 8080.
+
+### Step 3: Start Storage Nodes
+
+Start at least 3 storage nodes with different IDs in separate terminals:
+
+```bash
 # Start first storage node
-./storage --id 8001 --controller localhost:8000 --computation localhost:8080 --data ./storage_data_1
+./storage/storage -id 8001 -data storage/data1 -controller localhost:8000 -computation localhost:8080
 
-# Start second storage node (in a new terminal)
-./storage --id 8002 --controller localhost:8000 --computation localhost:8080 --data ./storage_data_2
+# Start second storage node
+./storage/storage -id 8002 -data storage/data2 -controller localhost:8000 -computation localhost:8080
 
-# Start third storage node (in a new terminal)
-./storage --id 8003 --controller localhost:8000 --computation localhost:8080 --data ./storage_data_3
+# Start third storage node
+./storage/storage -id 8003 -data storage/data3 -controller localhost:8000 -computation localhost:8080
 ```
 
-## Step 4: Compile the Example MapReduce Jobs
+### Step 4: Compile the Example MapReduce Jobs
 
 Compile the example MapReduce jobs:
 
@@ -57,81 +79,226 @@ Compile the example MapReduce jobs:
 # Compile the word count example
 go build -o wordcount examples/wordcount/wordcount.go
 
-# Compile the log analyzer
+# Compile the log analyzer (optional)
 go build -o loganalyzer examples/loganalyzer/loganalyzer.go
 ```
 
-## Step 5: Store Input Files in the DFS
+### Step 5: Store Input Files in the DFS
 
-Use the client to store input files in the DFS:
-
-```bash
-cd client
-go build
-
-# Store a text file for word count
-./client store sample_text.txt
-
-# Store a log file for log analysis
-./client store sample_log.txt
-```
-
-You can create sample files with the following commands:
+Create and store a sample text file:
 
 ```bash
 # Create a sample text file
 echo "This is a sample text file. It contains multiple words for testing the word count MapReduce job. This file will be processed by the MapReduce system to count the occurrences of each word." > sample_text.txt
 
-# Create a sample log file
-cat > sample_log.txt << EOL
-192.168.1.1 - - [21/Apr/2023:10:32:15 +0000] "GET /index.html HTTP/1.1" 200 2326 "Mozilla/5.0" 0.023
-192.168.1.2 - - [21/Apr/2023:10:32:16 +0000] "GET /images/logo.png HTTP/1.1" 200 4500 "Chrome/90.0" 0.015
-192.168.1.3 - - [21/Apr/2023:10:32:17 +0000] "GET /css/style.css HTTP/1.1" 200 1200 "Firefox/88.0" 0.010
-192.168.1.1 - - [21/Apr/2023:10:32:18 +0000] "GET /js/script.js HTTP/1.1" 200 3200 "Mozilla/5.0" 0.018
-192.168.1.4 - - [21/Apr/2023:10:32:19 +0000] "POST /api/login HTTP/1.1" 401 150 "Chrome/90.0" 0.025
-192.168.1.2 - - [21/Apr/2023:10:32:20 +0000] "GET /about.html HTTP/1.1" 200 1800 "Chrome/90.0" 0.012
-192.168.1.5 - - [21/Apr/2023:10:32:21 +0000] "GET /contact.html HTTP/1.1" 200 1500 "Safari/14.0" 0.014
-192.168.1.3 - - [21/Apr/2023:10:32:22 +0000] "POST /api/submit HTTP/1.1" 500 320 "Firefox/88.0" 0.035
-192.168.1.1 - - [21/Apr/2023:10:32:23 +0000] "GET /products.html HTTP/1.1" 200 5200 "Mozilla/5.0" 0.028
-192.168.1.6 - - [21/Apr/2023:10:32:24 +0000] "GET /services.html HTTP/1.1" 404 250 "Edge/91.0" 0.008
-EOL
+# Store the text file
+./client/client store sample_text.txt
 ```
 
-## Step 6: Submit MapReduce Jobs
+### Step 6: Submit MapReduce Jobs
 
-Now you can submit MapReduce jobs using the client:
+Submit a MapReduce job:
 
 ```bash
 # Run the word count job
-./client mapreduce wordcount sample_text.txt wordcount_output.txt 3 true
-
-# Run the log analyzer job
-./client mapreduce loganalyzer sample_log.txt loganalyzer_output.txt 7 true
+./client/client mapreduce wordcount sample_text.txt wordcount_output.txt 3 true
 ```
 
-The client will submit the job to the computation manager and monitor its progress. Once the job is complete, you can retrieve the output file:
+### Step 7: Retrieve and Examine Results
+
+Once the job is complete, retrieve and view the output file:
 
 ```bash
 # Retrieve the word count output
-./client retrieve wordcount_output.txt wordcount_results.txt
+./client/client retrieve wordcount_output.txt wordcount_results.txt
 
-# Retrieve the log analyzer output
-./client retrieve loganalyzer_output.txt loganalyzer_results.txt
+# View the results
+cat wordcount_results.txt
 ```
 
-## Step 7: Examine the Results
+### Quick Localhost Setup Script
 
-Open the output files to see the results:
+For convenience, you can use the following script to set up and test the MapReduce system on localhost. Save this as `setup_localhost.sh` and run it:
 
 ```bash
-# View word count results
+#!/bin/bash
+
+# Build all components
+echo "Building components..."
+cd controller && go build && cd ..
+cd computation && go build && cd ..
+cd storage && go build && cd ..
+cd client && go build && cd ..
+
+# Compile the word count example
+echo "Compiling word count example..."
+go build -o wordcount examples/wordcount/wordcount.go
+
+# Create sample text file
+echo "Creating sample text file..."
+echo "This is a sample text file. It contains multiple words for testing the word count MapReduce job. This file will be processed by the MapReduce system to count the occurrences of each word." > sample_text.txt
+
+# Create data directories
+echo "Creating data directories..."
+mkdir -p computation_data
+mkdir -p storage/data1 storage/data2 storage/data3
+
+# Start controller (in background)
+echo "Starting controller..."
+./controller/controller -port 8000 > controller.log 2>&1 &
+CONTROLLER_PID=$!
+sleep 2
+
+# Start computation manager (in background)
+echo "Starting computation manager..."
+./computation/computation -port 8080 -data computation_data -controller localhost:8000 > computation.log 2>&1 &
+COMPUTATION_PID=$!
+sleep 2
+
+# Start storage nodes (in background)
+echo "Starting storage nodes..."
+./storage/storage -id 8001 -data storage/data1 -controller localhost:8000 -computation localhost:8080 > storage1.log 2>&1 &
+STORAGE1_PID=$!
+sleep 1
+./storage/storage -id 8002 -data storage/data2 -controller localhost:8000 -computation localhost:8080 > storage2.log 2>&1 &
+STORAGE2_PID=$!
+sleep 1
+./storage/storage -id 8003 -data storage/data3 -controller localhost:8000 -computation localhost:8080 > storage3.log 2>&1 &
+STORAGE3_PID=$!
+sleep 2
+
+# Store the sample file
+echo "Storing sample file in DFS..."
+./client/client store sample_text.txt
+
+# Run the word count job
+echo "Running word count MapReduce job..."
+./client/client mapreduce wordcount sample_text.txt wordcount_output.txt 3 true
+
+# Retrieve the results
+echo "Retrieving results..."
+./client/client retrieve wordcount_output.txt wordcount_results.txt
+
+# Display results
+echo "Word count results:"
 cat wordcount_results.txt
 
-# View log analyzer results
-cat loganalyzer_results.txt
+# Cleanup function
+cleanup() {
+  echo "Cleaning up..."
+  kill $CONTROLLER_PID $COMPUTATION_PID $STORAGE1_PID $STORAGE2_PID $STORAGE3_PID
+  echo "Done!"
+}
+
+# Register cleanup function
+trap cleanup EXIT
+
+# Keep script running until user presses Ctrl+C
+echo "Press Ctrl+C to stop the MapReduce system"
+wait
 ```
 
-The word count output should show each word and its count, while the log analyzer output should show various analytics about the log data.
+Make the script executable and run it:
+
+```bash
+chmod +x setup_localhost.sh
+./setup_localhost.sh
+```
+
+This script will set up the entire MapReduce system on localhost, run a word count job, and display the results.
+
+## Option 2: Testing on the Orion Cluster
+
+For distributed testing on the Orion cluster, you'll need to run components on different machines.
+
+### Step 1: Start the Controller
+
+On the first machine (e.g., orion01):
+
+```bash
+./controller/controller -port 8000
+```
+
+### Step 2: Start the Computation Manager
+
+On the second machine (e.g., orion02):
+
+```bash
+./computation/computation -port 8080 -data computation_data -controller orion01:8000
+```
+
+Note: Replace `orion01` with the actual hostname or IP address of the machine running the controller.
+
+### Step 3: Start Storage Nodes
+
+On different machines (e.g., orion03, orion04, orion05):
+
+```bash
+# On orion03
+./storage/storage -id 8001 -data storage/data1 -controller orion01:8000 -computation orion02:8080
+
+# On orion04
+./storage/storage -id 8002 -data storage/data2 -controller orion01:8000 -computation orion02:8080
+
+# On orion05
+./storage/storage -id 8003 -data storage/data3 -controller orion01:8000 -computation orion02:8080
+```
+
+Note: Replace `orion01` and `orion02` with the actual hostnames or IP addresses of the machines running the controller and computation manager.
+
+### Step 4: Compile the Example MapReduce Jobs
+
+On any machine:
+
+```bash
+# Compile the word count example
+go build -o wordcount examples/wordcount/wordcount.go
+```
+
+### Step 5: Store Input Files in the DFS
+
+On any machine:
+
+```bash
+# Create a sample text file
+echo "This is a sample text file. It contains multiple words for testing the word count MapReduce job. This file will be processed by the MapReduce system to count the occurrences of each word." > sample_text.txt
+
+# Store the text file
+./client/client -controller orion01:8000 store sample_text.txt
+```
+
+### Step 6: Submit MapReduce Jobs
+
+On any machine:
+
+```bash
+# Run the word count job
+./client/client -controller orion01:8000 -computation orion02:8080 mapreduce wordcount sample_text.txt wordcount_output.txt 3 true
+```
+
+### Step 7: Retrieve and Examine Results
+
+On any machine:
+
+```bash
+# Retrieve the word count output
+./client/client -controller orion01:8000 retrieve wordcount_output.txt wordcount_results.txt
+
+# View the results
+cat wordcount_results.txt
+```
+
+## Important Notes for Distributed Deployment
+
+1. **IP Address Configuration**: Always use the actual hostname or IP address of each machine when specifying controller and computation manager addresses. Do not use `localhost` when components are running on different machines.
+
+2. **Network Connectivity**: Ensure all machines can communicate with each other over the specified ports (8000 for controller, 8080 for computation manager, and 8001-8003 for storage nodes).
+
+3. **Firewall Settings**: Make sure the necessary ports are open in any firewalls between the machines.
+
+4. **Data Directories**: Ensure the data directories specified for the computation manager and storage nodes exist and are writable.
+
+5. **Shuffle Phase**: The system now correctly handles the shuffle phase by routing all shuffle data through the computation manager instead of directly between storage nodes and reducers.
 
 ## Troubleshooting
 
@@ -142,16 +309,4 @@ If you encounter any issues:
 3. Check the logs of each component for error messages
 4. Ensure the MapReduce jobs were compiled correctly
 5. Make sure the storage nodes have enough disk space
-
-## Testing on the Orion Cluster
-
-To test on the Orion cluster:
-
-1. Copy all the code to the cluster
-2. Build all components
-3. Start the controller on orion01
-4. Start the computation manager on orion02
-5. Start storage nodes on orion03 through orion12
-6. Use the client on any node to submit jobs
-
-Make sure to use the correct hostnames when specifying controller and computation manager addresses.
+6. For "unexpected response type" errors related to shuffle, ensure you're using the latest version with the shuffle phase implementation
