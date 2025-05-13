@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -118,7 +119,71 @@ func GetAvailableDiskSpace(path string) (uint64, error) {
 
 // SplitFile divides a file into chunks of the specified size
 // Returns a slice of byte slices, each representing a chunk
+// For text files, it ensures chunks are split at line boundaries
 func SplitFile(file *os.File, chunkSize int64) ([][]byte, error) {
+	// Get file info to determine size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %v", err)
+	}
+	
+	// Check if the file is a text file based on extension
+	isTextFile := IsTextFile(fileInfo.Name())
+	
+	if isTextFile {
+		return SplitTextFile(file, chunkSize)
+	} else {
+		return SplitBinaryFile(file, chunkSize)
+	}
+}
+
+// SplitTextFile divides a text file into chunks, ensuring that chunks are split at line boundaries
+func SplitTextFile(file *os.File, chunkSize int64) ([][]byte, error) {
+	// Seek to the beginning of the file
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, fmt.Errorf("failed to seek to beginning of file: %v", err)
+	}
+	
+	chunks := make([][]byte, 0)
+	reader := bufio.NewReader(file)
+	
+	currentChunk := make([]byte, 0, chunkSize)
+	
+	// Read the file line by line
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return nil, fmt.Errorf("failed to read line: %v", err)
+		}
+		
+		// If adding this line would exceed the chunk size, store the current chunk
+		if int64(len(currentChunk)+len(line)) > chunkSize && len(currentChunk) > 0 {
+			// Store the current chunk
+			chunks = append(chunks, currentChunk)
+			
+			// Start a new chunk
+			currentChunk = make([]byte, 0, chunkSize)
+		}
+		
+		// Add the line to the current chunk
+		currentChunk = append(currentChunk, line...)
+		
+		// If we've reached the end of the file
+		if err == io.EOF {
+			break
+		}
+	}
+	
+	// Store any remaining data in the last chunk
+	if len(currentChunk) > 0 {
+		chunks = append(chunks, currentChunk)
+	}
+	
+	return chunks, nil
+}
+
+// SplitBinaryFile divides a binary file into chunks of the specified size
+func SplitBinaryFile(file *os.File, chunkSize int64) ([][]byte, error) {
 	// Get file info to determine size
 	fileInfo, err := file.Stat()
 	if err != nil {
@@ -128,6 +193,11 @@ func SplitFile(file *os.File, chunkSize int64) ([][]byte, error) {
 	fileSize := fileInfo.Size()
 	numChunks := (fileSize + chunkSize - 1) / chunkSize // Ceiling division
 	chunks := make([][]byte, 0, numChunks)
+	
+	// Seek to the beginning of the file
+	if _, err := file.Seek(0, 0); err != nil {
+		return nil, fmt.Errorf("failed to seek to beginning of file: %v", err)
+	}
 	
 	// Read file in chunks
 	for i := int64(0); i < numChunks; i++ {
@@ -149,6 +219,38 @@ func SplitFile(file *os.File, chunkSize int64) ([][]byte, error) {
 	}
 	
 	return chunks, nil
+}
+
+// IsTextFile determines if a file is a text file based on its extension
+func IsTextFile(filename string) bool {
+	// Common text file extensions
+	textExtensions := map[string]bool{
+		".txt":  true,
+		".log":  true,
+		".csv":  true,
+		".json": true,
+		".xml":  true,
+		".html": true,
+		".md":   true,
+		".go":   true,
+		".py":   true,
+		".js":   true,
+		".c":    true,
+		".cpp":  true,
+		".h":    true,
+		".java": true,
+	}
+	
+	// Get the file extension
+	ext := ""
+	for i := len(filename) - 1; i >= 0; i-- {
+		if filename[i] == '.' {
+			ext = filename[i:]
+			break
+		}
+	}
+	
+	return textExtensions[ext]
 }
 
 // JoinChunks combines multiple chunks into a single file

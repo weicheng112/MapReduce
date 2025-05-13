@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -171,6 +170,9 @@ func (cm *ComputationManager) handleConnection(conn net.Conn) {
 		// No response needed
 	case common.MsgTypeComputeHeartbeat:
 		err = cm.handleComputeHeartbeat(data)
+	case common.MsgTypeShuffle:
+		response, err = cm.handleShuffle(data)
+		responseType = common.MsgTypeShuffleResponse
 	default:
 		err = fmt.Errorf("unknown message type: %d", msgType)
 	}
@@ -311,8 +313,8 @@ func (cm *ComputationManager) handleComputeHeartbeat(data []byte) error {
 		return fmt.Errorf("failed to unmarshal compute heartbeat: %v", err)
 	}
 
-	log.Printf("Received heartbeat from compute node: %s, cores: %d, memory: %d, active tasks: %d",
-		heartbeat.NodeId, heartbeat.CpuCores, heartbeat.MemoryAvailable, heartbeat.ActiveTasks)
+	// log.Printf("Received heartbeat from compute node: %s, cores: %d, memory: %d, active tasks: %d",
+	// 	heartbeat.NodeId, heartbeat.CpuCores, heartbeat.MemoryAvailable, heartbeat.ActiveTasks)
 
 	// Handle compute heartbeat
 	if cm.jobManager == nil {
@@ -324,6 +326,137 @@ func (cm *ComputationManager) handleComputeHeartbeat(data []byte) error {
 	}
 
 	return nil
+}
+
+// handleShuffle handles a shuffle request from a storage node
+func (cm *ComputationManager) handleShuffle(data []byte) ([]byte, error) {
+	// Parse request
+	request := &pb.ShuffleRequest{}
+	if err := proto.Unmarshal(data, request); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal shuffle request: %v", err)
+	}
+
+	log.Printf("Received shuffle request for job: %s, mapper: %s, reducer: %d",
+		request.JobId, request.MapperId, request.ReducerNumber)
+
+	// Get job
+	cm.jobsMutex.RLock()
+	job, exists := cm.jobs[request.JobId]
+	cm.jobsMutex.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("job not found: %s", request.JobId)
+	}
+
+	// Find the reducer node for this reducer number
+	var reducerAddr string
+	for _, reducer := range job.Reducers {
+		if reducer.ReducerNumber == request.ReducerNumber {
+			reducerAddr = reducer.Address
+			break
+		}
+	}
+
+	if reducerAddr == "" {
+		return nil, fmt.Errorf("reducer not found for number: %d", request.ReducerNumber)
+	}
+
+	// Forward shuffle data to the reducer
+	if err := cm.forwardShuffleData(reducerAddr, request); err != nil {
+		return nil, fmt.Errorf("failed to forward shuffle data: %v", err)
+	}
+
+	// Return success response
+	response := &pb.ShuffleResponse{
+		JobId:   request.JobId,
+		Success: true,
+	}
+
+	// Serialize response
+	responseData, err := proto.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal response: %v", err)
+	}
+
+	return responseData, nil
+}
+
+// forwardShuffleData forwards shuffle data to a reducer node
+func (cm *ComputationManager) forwardShuffleData(reducerAddr string, request *pb.ShuffleRequest) error {
+	// Serialize request
+	requestData, err := proto.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	// Try to send the request with retries
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		// Connect to reducer
+		conn, err := net.Dial("tcp", reducerAddr)
+		if err != nil {
+			log.Printf("Failed to connect to reducer (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to connect to reducer after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Send request
+		err = common.WriteMessage(conn, common.MsgTypeShuffle, requestData)
+		if err != nil {
+			conn.Close()
+			log.Printf("Failed to send shuffle request (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to send shuffle request after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+
+		// Read response
+		msgType, responseData, err := common.ReadMessage(conn)
+		conn.Close()
+		
+		if err != nil {
+			log.Printf("Failed to read shuffle response (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to read shuffle response after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+
+		if msgType != common.MsgTypeShuffleResponse {
+			log.Printf("Unexpected response type (attempt %d/%d): %d", i+1, maxRetries, msgType)
+			if i == maxRetries-1 {
+				return fmt.Errorf("unexpected response type after %d attempts: %d", maxRetries, msgType)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+
+		// Parse response
+		response := &pb.ShuffleResponse{}
+		if err := proto.Unmarshal(responseData, response); err != nil {
+			log.Printf("Failed to unmarshal response (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to unmarshal response after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+
+		if !response.Success {
+			return fmt.Errorf("shuffle failed: %s", response.Error)
+		}
+
+		// Success
+		return nil
+	}
+	
+	return fmt.Errorf("failed to forward shuffle data after %d attempts", maxRetries)
 }
 
 // scheduleMapTasks schedules map tasks for a job
@@ -488,59 +621,59 @@ func (cm *ComputationManager) findSuitableNode(jobID string, isMapTask bool, chu
 		}
 	}
 	
-	// sendMapTaskRequest sends a map task request to a node
-	func (cm *ComputationManager) sendMapTaskRequest(nodeAddr string, request *pb.MapTaskRequest) error {
-		// Connect to node
-		conn, err := net.Dial("tcp", nodeAddr)
-		if err != nil {
-			return fmt.Errorf("failed to connect to node: %v", err)
-		}
-		defer conn.Close()
-	
-		// Serialize request
-		requestData, err := proto.Marshal(request)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request: %v", err)
-		}
-	
-		// Send request
-		if err := common.WriteMessage(conn, common.MsgTypeMapTask, requestData); err != nil {
-			return fmt.Errorf("failed to send request: %v", err)
-		}
-	
-		// No response expected immediately; node will send MapTaskResponse when task completes
-		return nil
-	}
-	
-	// sendReduceTaskRequest sends a reduce task request to a node
-	func (cm *ComputationManager) sendReduceTaskRequest(nodeAddr string, request *pb.ReduceTaskRequest) error {
-		// Connect to node
-		conn, err := net.Dial("tcp", nodeAddr)
-		if err != nil {
-			return fmt.Errorf("failed to connect to node: %v", err)
-		}
-		defer conn.Close()
-	
-		// Serialize request
-		requestData, err := proto.Marshal(request)
-		if err != nil {
-			return fmt.Errorf("failed to marshal request: %v", err)
-		}
-	
-		// Send request
-		if err := common.WriteMessage(conn, common.MsgTypeReduceTask, requestData); err != nil {
-			return fmt.Errorf("failed to send request: %v", err)
-		}
-	
-		// No response expected immediately; node will send ReduceTaskResponse when task completes
-		return nil
-	}
-	
 	if selectedNode == nil {
 		return "", fmt.Errorf("no suitable node found")
 	}
 
 	return selectedNode.ID, nil
+}
+
+// sendMapTaskRequest sends a map task request to a node
+func (cm *ComputationManager) sendMapTaskRequest(nodeAddr string, request *pb.MapTaskRequest) error {
+	// Connect to node
+	conn, err := net.Dial("tcp", nodeAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to node: %v", err)
+	}
+	defer conn.Close()
+
+	// Serialize request
+	requestData, err := proto.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	// Send request
+	if err := common.WriteMessage(conn, common.MsgTypeMapTask, requestData); err != nil {
+		return fmt.Errorf("failed to send request: %v", err)
+	}
+
+	// No response expected immediately; node will send MapTaskResponse when task completes
+	return nil
+}
+
+// sendReduceTaskRequest sends a reduce task request to a node
+func (cm *ComputationManager) sendReduceTaskRequest(nodeAddr string, request *pb.ReduceTaskRequest) error {
+	// Connect to node
+	conn, err := net.Dial("tcp", nodeAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to node: %v", err)
+	}
+	defer conn.Close()
+
+	// Serialize request
+	requestData, err := proto.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %v", err)
+	}
+
+	// Send request
+	if err := common.WriteMessage(conn, common.MsgTypeReduceTask, requestData); err != nil {
+		return fmt.Errorf("failed to send request: %v", err)
+	}
+
+	// No response expected immediately; node will send ReduceTaskResponse when task completes
+	return nil
 }
 
 // generateTaskID generates a unique task ID

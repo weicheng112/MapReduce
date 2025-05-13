@@ -83,8 +83,9 @@ func (n *StorageNode) Start() error {
 		return fmt.Errorf("failed to connect to controller: %v", err)
 	}
 
-	// Start heartbeat
+	// Start heartbeats to controller and computation manager
 	go n.sendHeartbeats()
+	go n.sendComputeHeartbeats()
 
 	// Start listener for chunk operations
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", n.nodeID))
@@ -154,7 +155,13 @@ func (n *StorageNode) handleConnection(conn net.Conn) {
 
 		// Send response if one was generated
 		if response != nil {
-			if err := common.WriteMessage(conn, msgType, response); err != nil {
+			// For shuffle requests, use MsgTypeShuffleResponse as the response type
+			responseType := msgType
+			if msgType == common.MsgTypeShuffle {
+				responseType = common.MsgTypeShuffleResponse
+			}
+			
+			if err := common.WriteMessage(conn, responseType, response); err != nil {
 				log.Printf("Error sending response: %v", err)
 				return
 			}

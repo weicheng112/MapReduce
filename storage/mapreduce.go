@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"dfs/common"
 	pb "dfs/proto"
@@ -540,8 +541,8 @@ func (h *MapReduceHandler) sendShuffleData(task *ActiveTask) error {
 			KeyValuePairs: pairs,
 		}
 
-		// Send shuffle request to reducer
-		if err := h.sendShuffleRequest(reducer.Address, request); err != nil {
+		// Send shuffle request to computation manager instead of directly to reducer
+		if err := h.sendShuffleRequest(h.node.computationAddr, request); err != nil {
 			return fmt.Errorf("failed to send shuffle request: %v", err)
 		}
 	}
@@ -549,59 +550,86 @@ func (h *MapReduceHandler) sendShuffleData(task *ActiveTask) error {
 	return nil
 }
 
-// sendShuffleRequest sends a shuffle request to a reducer
-func (h *MapReduceHandler) sendShuffleRequest(reducerAddr string, request *pb.ShuffleRequest) error {
-	// Connect to reducer
-	conn, err := net.Dial("tcp", reducerAddr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to reducer: %v", err)
-	}
-	defer conn.Close()
-
+// sendShuffleRequest sends a shuffle request to the computation manager
+func (h *MapReduceHandler) sendShuffleRequest(computationAddr string, request *pb.ShuffleRequest) error {
 	// Serialize request
 	requestData, err := proto.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %v", err)
 	}
 
-	// Send request
-	if err := common.WriteMessage(conn, common.MsgTypeShuffle, requestData); err != nil {
-		return fmt.Errorf("failed to send request: %v", err)
-	}
+	// Try to send the request with retries
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		// Connect to computation manager
+		conn, err := net.Dial("tcp", computationAddr)
+		if err != nil {
+			log.Printf("Failed to connect to computation manager (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to connect to computation manager after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Send request
+		err = common.WriteMessage(conn, common.MsgTypeShuffle, requestData)
+		if err != nil {
+			conn.Close()
+			log.Printf("Failed to send shuffle request (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to send shuffle request after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
 
-	// Read response
-	msgType, responseData, err := common.ReadMessage(conn)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %v", err)
-	}
+		// Read response
+		msgType, responseData, err := common.ReadMessage(conn)
+		conn.Close()
+		
+		if err != nil {
+			log.Printf("Failed to read shuffle response (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to read shuffle response after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
 
-	if msgType != common.MsgTypeShuffleResponse {
-		return fmt.Errorf("unexpected response type: %d", msgType)
-	}
+		if msgType != common.MsgTypeShuffleResponse {
+			log.Printf("Unexpected response type (attempt %d/%d): %d", i+1, maxRetries, msgType)
+			if i == maxRetries-1 {
+				return fmt.Errorf("unexpected response type after %d attempts: %d", maxRetries, msgType)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
 
-	// Parse response
-	response := &pb.ShuffleResponse{}
-	if err := proto.Unmarshal(responseData, response); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %v", err)
-	}
+		// Parse response
+		response := &pb.ShuffleResponse{}
+		if err := proto.Unmarshal(responseData, response); err != nil {
+			log.Printf("Failed to unmarshal response (attempt %d/%d): %v", i+1, maxRetries, err)
+			if i == maxRetries-1 {
+				return fmt.Errorf("failed to unmarshal response after %d attempts: %v", maxRetries, err)
+			}
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
 
-	if !response.Success {
-		return fmt.Errorf("shuffle failed: %s", response.Error)
-	}
+		if !response.Success {
+			return fmt.Errorf("shuffle failed: %s", response.Error)
+		}
 
-	return nil
+		// Success
+		return nil
+	}
+	
+	return fmt.Errorf("failed to send shuffle request after %d attempts", maxRetries)
 }
 
 // sendMapTaskResponse sends a map task response to the computation manager
 func (h *MapReduceHandler) sendMapTaskResponse(response *pb.MapTaskResponse) {
-	// Connect to computation manager
-	conn, err := net.Dial("tcp", h.node.computationAddr)
-	if err != nil {
-		log.Printf("Failed to connect to computation manager: %v", err)
-		return
-	}
-	defer conn.Close()
-
 	// Serialize response
 	responseData, err := proto.Marshal(response)
 	if err != nil {
@@ -609,23 +637,36 @@ func (h *MapReduceHandler) sendMapTaskResponse(response *pb.MapTaskResponse) {
 		return
 	}
 
-	// Send response
-	if err := common.WriteMessage(conn, common.MsgTypeMapTaskComplete, responseData); err != nil {
-		log.Printf("Failed to send response: %v", err)
+	// Try to send the response with retries
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		// Connect to computation manager
+		conn, err := net.Dial("tcp", h.node.computationAddr)
+		if err != nil {
+			log.Printf("Failed to connect to computation manager (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Send response
+		err = common.WriteMessage(conn, common.MsgTypeMapTaskComplete, responseData)
+		conn.Close() // Close connection after sending
+		
+		if err != nil {
+			log.Printf("Failed to send response (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Success
 		return
 	}
+	
+	log.Printf("Failed to send map task response after %d attempts", maxRetries)
 }
 
 // sendReduceTaskResponse sends a reduce task response to the computation manager
 func (h *MapReduceHandler) sendReduceTaskResponse(response *pb.ReduceTaskResponse) {
-	// Connect to computation manager
-	conn, err := net.Dial("tcp", h.node.computationAddr)
-	if err != nil {
-		log.Printf("Failed to connect to computation manager: %v", err)
-		return
-	}
-	defer conn.Close()
-
 	// Serialize response
 	responseData, err := proto.Marshal(response)
 	if err != nil {
@@ -633,11 +674,32 @@ func (h *MapReduceHandler) sendReduceTaskResponse(response *pb.ReduceTaskRespons
 		return
 	}
 
-	// Send response
-	if err := common.WriteMessage(conn, common.MsgTypeReduceTaskComplete, responseData); err != nil {
-		log.Printf("Failed to send response: %v", err)
+	// Try to send the response with retries
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		// Connect to computation manager
+		conn, err := net.Dial("tcp", h.node.computationAddr)
+		if err != nil {
+			log.Printf("Failed to connect to computation manager (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Send response
+		err = common.WriteMessage(conn, common.MsgTypeReduceTaskComplete, responseData)
+		conn.Close() // Close connection after sending
+		
+		if err != nil {
+			log.Printf("Failed to send response (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(time.Second * time.Duration(i+1)) // Exponential backoff
+			continue
+		}
+		
+		// Success
 		return
 	}
+	
+	log.Printf("Failed to send reduce task response after %d attempts", maxRetries)
 }
 
 // storeOutputFile stores the output file in the DFS
