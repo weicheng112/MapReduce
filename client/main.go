@@ -16,14 +16,16 @@ import (
 
 // Client handles user interactions with the distributed file system
 type Client struct {
-	controllerAddr  string    // Address of the controller
-	defaultChunkSize int64    // Default size for file chunks
+	controllerAddr   string    // Address of the controller
+	computationAddr  string    // Address of the computation manager
+	defaultChunkSize int64     // Default size for file chunks
 }
 
 // NewClient creates a new client instance
-func NewClient(controllerAddr string) *Client {
+func NewClient(controllerAddr, computationAddr string) *Client {
 	return &Client{
 		controllerAddr:   controllerAddr,
+		computationAddr:  computationAddr,
 		defaultChunkSize: common.DefaultChunkSize,
 	}
 }
@@ -187,7 +189,8 @@ func (c *Client) runInteractive() {
 		fmt.Println("3. list")
 		fmt.Println("4. delete <filename>")
 		fmt.Println("5. status")
-		fmt.Println("6. exit")
+		fmt.Println("6. mapreduce <job_binary> <input_file> <output_file> [num_reducers] [is_text_file]")
+		fmt.Println("7. exit")
 		fmt.Print("\nEnter command: ")
 
 		command, _ := reader.ReadString('\n')
@@ -279,6 +282,38 @@ func (c *Client) runInteractive() {
 			}
 			fmt.Printf("\nTotal Available Space: %d GB\n", status.TotalSpace/(1024*1024*1024))
 
+		case "mapreduce":
+			if len(parts) < 4 {
+				fmt.Println("Usage: mapreduce <job_binary> <input_file> <output_file> [num_reducers] [is_text_file]")
+				continue
+			}
+			
+			jobBinaryPath := parts[1]
+			inputFile := parts[2]
+			outputFile := parts[3]
+			
+			// Default values
+			numReducers := uint32(common.DefaultNumReducers)
+			isTextFile := true
+			
+			// Parse optional arguments
+			if len(parts) > 4 {
+				var n int
+				_, err := fmt.Sscanf(parts[4], "%d", &n)
+				if err == nil && n > 0 {
+					numReducers = uint32(n)
+				}
+			}
+			
+			if len(parts) > 5 {
+				isTextFile = parts[5] == "true"
+			}
+			
+			// Submit job
+			if err := c.submitJob(jobBinaryPath, inputFile, outputFile, numReducers, isTextFile); err != nil {
+				fmt.Printf("Error submitting job: %v\n", err)
+			}
+
 		case "exit":
 			fmt.Println("Goodbye!")
 			return
@@ -292,10 +327,89 @@ func (c *Client) runInteractive() {
 func main() {
 	// Parse command line arguments
 	controllerAddr := flag.String("controller", "localhost:8000", "Controller address")
-	fmt.Printf("controller addr: %s", *controllerAddr)
+	computationAddr := flag.String("computation", "localhost:8080", "Computation manager address")
+	
+	// Check for command-line mode
 	flag.Parse()
-
-	// Create and run client
-	client := NewClient(*controllerAddr)
-	client.runInteractive()
+	args := flag.Args()
+	
+	// Create client
+	client := NewClient(*controllerAddr, *computationAddr)
+	
+	// Check if we're running in command-line mode
+	if len(args) > 0 {
+		switch args[0] {
+		case "store":
+			if len(args) < 2 {
+				fmt.Println("Usage: client store <filepath> [chunk_size]")
+				os.Exit(1)
+			}
+			chunkSize := client.defaultChunkSize
+			if len(args) > 2 {
+				size, err := strconv.ParseInt(args[2], 10, 64)
+				if err == nil && size > 0 {
+					chunkSize = size
+				}
+			}
+			if err := client.storeFile(args[1], chunkSize); err != nil {
+				log.Fatalf("Error storing file: %v", err)
+			}
+			
+		case "retrieve":
+			if len(args) != 3 {
+				fmt.Println("Usage: client retrieve <filename> <output_path>")
+				os.Exit(1)
+			}
+			if err := client.retrieveFile(args[1], args[2]); err != nil {
+				log.Fatalf("Error retrieving file: %v", err)
+			}
+			
+		case "list":
+			files, err := client.listFiles()
+			if err != nil {
+				log.Fatalf("Error listing files: %v", err)
+			}
+			fmt.Println("Files in DFS:")
+			fmt.Println("Name\tSize\tChunks")
+			fmt.Println("----\t----\t------")
+			for _, file := range files {
+				fmt.Printf("%s\t%d\t%d\n", file.Filename, file.Size, file.NumChunks)
+			}
+			
+		case "delete":
+			if len(args) != 2 {
+				fmt.Println("Usage: client delete <filename>")
+				os.Exit(1)
+			}
+			if err := client.deleteFile(args[1]); err != nil {
+				log.Fatalf("Error deleting file: %v", err)
+			}
+			
+		case "status":
+			status, err := client.getNodeStatus()
+			if err != nil {
+				log.Fatalf("Error getting node status: %v", err)
+			}
+			fmt.Println("Storage Node Status:")
+			fmt.Println("Node ID\tFree Space\tRequests Handled")
+			fmt.Println("-------\t----------\t---------------")
+			for _, node := range status.Nodes {
+				fmt.Printf("%s\t%d GB\t%d\n",
+					node.NodeId,
+					node.FreeSpace/(1024*1024*1024),
+					node.RequestsProcessed)
+			}
+			fmt.Printf("Total Available Space: %d GB\n", status.TotalSpace/(1024*1024*1024))
+			
+		case "mapreduce":
+			client.handleMapReduceCommand()
+			
+		default:
+			fmt.Printf("Unknown command: %s\n", args[0])
+			os.Exit(1)
+		}
+	} else {
+		// Run in interactive mode
+		client.runInteractive()
+	}
 }
