@@ -118,3 +118,122 @@ message ChunkRetrieveResponse {
   bool corrupted = 2;
   string error = 3;  // Empty if successful
 }
+
+// MapReduce Protocol Messages
+
+// Message for submitting a MapReduce job
+message JobSubmitRequest {
+  string job_id = 1;           // Unique identifier for the job
+  string input_file = 2;       // Input file in DFS
+  string output_file = 3;      // Output file in DFS
+  bytes job_binary = 4;        // Compiled job binary (plugin or executable)
+  uint32 num_reducers = 5;     // Number of reducers to use
+  bool is_text_file = 6;       // Whether the input file is text-based (for line-based partitioning)
+}
+
+// Response to job submission
+message JobSubmitResponse {
+  bool success = 1;
+  string job_id = 2;           // Job ID assigned by the system
+  string error = 3;            // Error message if submission failed
+}
+
+// Message for checking job status
+message JobStatusRequest {
+  string job_id = 1;
+}
+
+// Response with job status
+message JobStatusResponse {
+  enum JobState {
+    PENDING = 0;
+    MAPPING = 1;
+    SHUFFLING = 2;
+    REDUCING = 3;
+    COMPLETED = 4;
+    FAILED = 5;
+  }
+  
+  string job_id = 1;
+  JobState state = 2;
+  uint32 total_map_tasks = 3;
+  uint32 completed_map_tasks = 4;
+  uint32 total_reduce_tasks = 5;
+  uint32 completed_reduce_tasks = 6;
+  string error = 7;            // Error message if job failed
+}
+
+// Message for assigning a map task to a storage node
+message MapTaskRequest {
+  string job_id = 1;
+  string task_id = 2;          // Unique identifier for this task
+  string filename = 3;
+  uint32 chunk_number = 4;
+  bytes job_binary = 5;        // Compiled job binary
+  repeated ReducerInfo reducers = 6; // Information about reducers for the shuffle phase
+}
+
+// Information about a reducer
+message ReducerInfo {
+  string node_id = 1;
+  string address = 2;
+  uint32 reducer_number = 3;
+}
+
+// Response from a storage node after completing a map task
+message MapTaskResponse {
+  string job_id = 1;
+  string task_id = 2;
+  bool success = 3;
+  string error = 4;            // Error message if task failed
+  repeated string intermediate_files = 5; // Files created during map phase
+}
+
+// Message for sending shuffle data to a reducer
+message ShuffleRequest {
+  string job_id = 1;
+  string mapper_id = 2;        // ID of the mapper that generated this data
+  uint32 reducer_number = 3;
+  repeated KeyValuePair key_value_pairs = 4;
+}
+
+// Key-value pair for shuffle phase
+message KeyValuePair {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+// Response after receiving shuffle data
+message ShuffleResponse {
+  string job_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// Message for assigning a reduce task to a storage node
+message ReduceTaskRequest {
+  string job_id = 1;
+  string task_id = 2;
+  uint32 reducer_number = 3;
+  bytes job_binary = 4;
+  string output_file = 5;      // Final output file in DFS
+}
+
+// Response from a storage node after completing a reduce task
+message ReduceTaskResponse {
+  string job_id = 1;
+  string task_id = 2;
+  bool success = 3;
+  string error = 4;
+  string output_file = 5;      // Final output file stored in DFS
+}
+
+// Message for reporting computation node status to computation manager
+message ComputeNodeHeartbeat {
+  string node_id = 1;
+  string node_hostname = 2;
+  uint32 cpu_cores = 3;        // Number of CPU cores available
+  uint64 memory_available = 4; // Available memory in bytes
+  uint32 active_tasks = 5;     // Number of tasks currently running
+  repeated string active_job_ids = 6; // IDs of jobs currently running on this node
+}
