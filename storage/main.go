@@ -27,8 +27,9 @@ type StorageNode struct {
 	mu sync.RWMutex
 
 	// Configuration
-	nodeID         string // Unique identifier for this node (typically IP:port)
-	controllerAddr string // Address of the controller
+	nodeID           string // Unique identifier for this node (typically IP:port)
+	controllerAddr   string // Address of the controller
+	computationAddr  string // Address of the computation manager
 	dataDir        string // Directory where chunks are stored
 	reportExisting bool   // Whether to report existing files on startup
 
@@ -47,13 +48,17 @@ type StorageNode struct {
 
 	// Track reported files
 	reportedFiles map[string]bool // Files that have been reported to the controller
+	
+	// MapReduce
+	mapReduceHandler *MapReduceHandler // Handler for MapReduce tasks
 }
 
 // NewStorageNode creates a new storage node instance
-func NewStorageNode(nodeID, controllerAddr, dataDir string, reportExisting bool) *StorageNode {
+func NewStorageNode(nodeID, controllerAddr, computationAddr, dataDir string, reportExisting bool) *StorageNode {
 	return &StorageNode{
-		nodeID:         nodeID,
-		controllerAddr: controllerAddr,
+		nodeID:           nodeID,
+		controllerAddr:   controllerAddr,
+		computationAddr:  computationAddr,
 		dataDir:        dataDir,
 		reportExisting: reportExisting,
 		chunks:         make(map[string]*ChunkMetadata),
@@ -89,6 +94,10 @@ func (n *StorageNode) Start() error {
 	n.listener = listener
 
 	log.Printf("Storage node started. ID: %s, Data dir: %s", n.nodeID, n.dataDir)
+	
+	// Initialize MapReduce handler
+	n.mapReduceHandler = NewMapReduceHandler(n)
+	log.Printf("MapReduce handler initialized")
 
 	// Accept and handle connections
 	for {
@@ -122,6 +131,12 @@ func (n *StorageNode) handleConnection(conn net.Conn) {
 			response, respErr = n.handleChunkStore(data)
 		case common.MsgTypeChunkRetrieve:
 			response, respErr = n.handleChunkRetrieve(data)
+		case common.MsgTypeMapTask:
+			response, respErr = n.mapReduceHandler.HandleMapTask(data)
+		case common.MsgTypeReduceTask:
+			response, respErr = n.mapReduceHandler.HandleReduceTask(data)
+		case common.MsgTypeShuffle:
+			response, respErr = n.mapReduceHandler.HandleShuffle(data)
 		default:
 			respErr = &common.ProtocolError{Message: fmt.Sprintf("unknown message type: %d", msgType)}
 		}
@@ -266,6 +281,7 @@ func main() {
 	// Parse command line arguments
 	nodeID := flag.String("id", "", "Node ID (port number)")
 	controllerAddr := flag.String("controller", "localhost:8000", "Controller address")
+	computationAddr := flag.String("computation", "localhost:8080", "Computation manager address")
 	dataDir := flag.String("data", "", "Data directory path")
 	reportExisting := flag.Bool("report-existing", false, "Whether to report existing files on startup")
 	flag.Parse()
@@ -276,7 +292,7 @@ func main() {
 	}
 
 	// Create and start storage node
-	node := NewStorageNode(*nodeID, *controllerAddr, *dataDir, *reportExisting)
+	node := NewStorageNode(*nodeID, *controllerAddr, *computationAddr, *dataDir, *reportExisting)
 	if err := node.Start(); err != nil {
 		log.Fatalf("Storage node failed to start: %v", err)
 	}
