@@ -144,10 +144,17 @@ func (n *StorageNode) handleChunkStore(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to store chunk: %v", err)
 	}
 
-	// Forward to replicas if needed
-	for _, replicaNode := range request.ReplicaNodes {
-		if replicaNode != n.nodeID {
-			go n.forwardChunk(replicaNode, request.Filename, request.ChunkNumber, request.Data)
+	// Forward to the next node in the chain if there are any replica nodes left
+	if len(request.ReplicaNodes) > 0 {
+		// Get the next node in the chain
+		nextNode := request.ReplicaNodes[0]
+		
+		// Create a new slice with the remaining nodes (excluding the next node)
+		remainingNodes := request.ReplicaNodes[1:]
+		
+		// Forward to the next node in the chain
+		if nextNode != n.nodeID {
+			go n.forwardChunk(nextNode, request.Filename, request.ChunkNumber, request.Data, remainingNodes)
 		}
 	}
 
@@ -206,7 +213,7 @@ func (n *StorageNode) handleChunkRetrieve(data []byte) ([]byte, error) {
 }
 
 // forwardChunk forwards a chunk to another storage node
-func (n *StorageNode) forwardChunk(nodeID string, filename string, chunkNum uint32, data []byte) error {
+func (n *StorageNode) forwardChunk(nodeID string, filename string, chunkNum uint32, data []byte, remainingNodes []string) error {
 	// Connect to replica node
 	// Ensure the node address includes the hostname
 	nodeAddr := nodeID
@@ -223,12 +230,12 @@ func (n *StorageNode) forwardChunk(nodeID string, filename string, chunkNum uint
 	}
 	defer conn.Close()
 
-	// Create request
+	// Create request with the remaining nodes in the chain
 	request := &pb.ChunkStoreRequest{
 		Filename:     filename,
 		ChunkNumber:  chunkNum,
 		Data:        data,
-		// No further replicas to forward to
+		ReplicaNodes: remainingNodes, // Pass the remaining nodes to the next node
 	}
 
 	// Serialize request
