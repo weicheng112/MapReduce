@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"dfs/common"
 )
@@ -83,6 +84,9 @@ func (n *StorageNode) Start() error {
 		return fmt.Errorf("failed to connect to controller: %v", err)
 	}
 
+	// Start controller connection monitor
+	go n.monitorControllerConnection()
+
 	// Start heartbeats to controller and computation manager
 	go n.sendHeartbeats()
 	go n.sendComputeHeartbeats()
@@ -108,6 +112,41 @@ func (n *StorageNode) Start() error {
 			continue
 		}
 		go n.handleConnection(conn)
+	}
+}
+
+// monitorControllerConnection monitors the controller connection and reconnects if needed
+func (n *StorageNode) monitorControllerConnection() {
+	for {
+		// If the connection is nil, try to reconnect
+		if n.controllerConn == nil {
+			log.Printf("Controller connection is nil, attempting to reconnect...")
+			if err := n.connectToController(); err != nil {
+				log.Printf("Failed to reconnect to controller: %v", err)
+				time.Sleep(5 * time.Second) // Wait before retrying
+				continue
+			}
+			log.Printf("Successfully reconnected to controller")
+		}
+
+		// Check if the connection is still alive by sending a heartbeat
+		if err := n.sendHeartbeat(); err != nil {
+			log.Printf("Controller connection check failed: %v", err)
+			// Close the existing connection if it's not nil
+			if n.controllerConn != nil {
+				n.controllerConn.Close()
+				n.controllerConn = nil
+			}
+			// Try to reconnect immediately
+			if err := n.connectToController(); err != nil {
+				log.Printf("Failed to reconnect to controller: %v", err)
+			} else {
+				log.Printf("Successfully reconnected to controller")
+			}
+		}
+
+		// Wait before checking again
+		time.Sleep(10 * time.Second)
 	}
 }
 

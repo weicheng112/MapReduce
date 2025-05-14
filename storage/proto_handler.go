@@ -87,9 +87,16 @@ func (n *StorageNode) sendHeartbeats() {
 			log.Printf("Failed to send heartbeat: %v", err)
 			
 			// Try to reconnect to controller
+			if n.controllerConn != nil {
+				n.controllerConn.Close()
+				n.controllerConn = nil
+			}
+			
 			if err := n.connectToController(); err != nil {
 				log.Printf("Failed to reconnect to controller: %v", err)
 				continue
+			} else {
+				log.Printf("Successfully reconnected to controller during heartbeat")
 			}
 		}
 	}
