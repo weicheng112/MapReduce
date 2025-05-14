@@ -63,6 +63,7 @@ func (jm *JobManager) SubmitJob(request *pb.JobSubmitRequest) (*pb.JobSubmitResp
 	chunkToNodes := make(map[uint32][]string)
 	for _, chunkLoc := range chunkLocations {
 		chunkToNodes[chunkLoc.ChunkNumber] = chunkLoc.StorageNodes
+		log.Printf("Chunk %d is located on nodes: %v", chunkLoc.ChunkNumber, chunkLoc.StorageNodes)
 	}
 
 	// Create job
@@ -444,11 +445,8 @@ func (jm *JobManager) retrieveReducerOutput(job *Job, reducerNumber uint32) ([]b
 	// Try each node until successful
 	var lastErr error
 	for _, nodeID := range chunk.StorageNodes {
-		// Connect to storage node
+		// Connect to storage node - nodeID should already be a full address (hostname:port)
 		nodeAddr := nodeID
-		if !strings.Contains(nodeAddr, ":") {
-			nodeAddr = "localhost:" + nodeAddr
-		}
 		
 		log.Printf("Connecting to storage node %s to retrieve chunk %d", nodeAddr, chunk.ChunkNumber)
 		
@@ -588,12 +586,10 @@ func (jm *JobManager) storeOutputFile(filename string, data []byte) error {
 		
 		nodeID := response.ChunkPlacements[0].StorageNodes[0]
 		
-		// Connect to storage node
+		// Connect to storage node - nodeID should already be a full address (hostname:port)
 		nodeAddr := nodeID
-		if !strings.Contains(nodeAddr, ":") {
-			nodeAddr = "localhost:" + nodeAddr
-		}
 		
+		log.Printf("Connecting to storage node %s to store output file", nodeAddr)
 		nodeConn, err := net.Dial("tcp", nodeAddr)
 		if err != nil {
 			return fmt.Errorf("failed to connect to storage node: %v", err)
@@ -654,13 +650,19 @@ func (jm *JobManager) HandleComputeHeartbeat(heartbeat *pb.ComputeNodeHeartbeat)
 	jm.nodesMutex.Lock()
 	defer jm.nodesMutex.Unlock()
 
-	node, exists := jm.cm.nodes[heartbeat.NodeId]
+	// Use full address (hostname:port) as the node ID for consistent matching with controller
+	fullNodeID := heartbeat.NodeHostname + ":" + heartbeat.NodeId
+	
+	// Log the node registration with full ID
+	log.Printf("Registering compute node with full ID: %s", fullNodeID)
+	
+	node, exists := jm.cm.nodes[fullNodeID]
 	if !exists {
 		node = &ComputeNode{
-			ID:      heartbeat.NodeId,
-			Address: heartbeat.NodeHostname + ":" + heartbeat.NodeId,
+			ID:      fullNodeID,
+			Address: fullNodeID,
 		}
-		jm.cm.nodes[heartbeat.NodeId] = node
+		jm.cm.nodes[fullNodeID] = node
 	}
 
 	// Update node information

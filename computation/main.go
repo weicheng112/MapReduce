@@ -625,12 +625,29 @@ func (cm *ComputationManager) findSuitableNode(jobID string, isMapTask bool, chu
 				var localNode *ComputeNode
 				var minActiveTasks uint32 = ^uint32(0) // Max uint32 value
 
+				// Log all available compute nodes for debugging
+				log.Printf("Available compute nodes: %v", func() []string {
+					var nodeIDs []string
+					for id := range cm.nodes {
+						nodeIDs = append(nodeIDs, id)
+					}
+					return nodeIDs
+				}())
+				
 				for _, nodeID := range nodeIDs {
+					// Log the node ID from controller for debugging
+					log.Printf("Checking if node ID from controller exists: %s", nodeID)
+					
+					// Try to find the node by its full ID
 					if node, exists := cm.nodes[nodeID]; exists {
+						log.Printf("Found node %s in compute nodes with %d active tasks", nodeID, node.ActiveTasks)
 						if node.ActiveTasks < minActiveTasks {
 							localNode = node
 							minActiveTasks = node.ActiveTasks
 						}
+					} else {
+						// Log that the node wasn't found
+						log.Printf("Node %s from controller not found in compute nodes", nodeID)
 					}
 				}
 
