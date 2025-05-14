@@ -399,7 +399,7 @@ func (h *MapReduceHandler) executeReduceTask(task *ActiveTask, outputFile string
 	
 	// Try to fetch shuffle files from DFS for each chunk
 	for chunkNum := 0; chunkNum < maxChunks; chunkNum++ {
-		dfsPath := fmt.Sprintf("job_%s_reducer_%d/chunk_%d.txt", task.JobID, task.ReducerNumber, chunkNum)
+		dfsPath := fmt.Sprintf("job_%s_reducer_%d_chunk_%d.txt", task.JobID, task.ReducerNumber, chunkNum)
 		
 		localPath, err := h.fetchFromDFS(dfsPath)
 		if err != nil {
@@ -807,9 +807,9 @@ func (h *MapReduceHandler) sendShuffleData(task *ActiveTask) error {
 		outputFile := task.OutputFiles[i]
 		
 		// Create a DFS path for the shuffle file
-		// Use a predictable naming pattern based on chunk number instead of mapper ID
+		// Use a flat naming pattern to avoid directory creation issues
 		// This way reducers can find the files without knowing the exact mapper IDs
-		dfsPath := fmt.Sprintf("job_%s_reducer_%d/chunk_%d.txt", task.JobID, reducer.ReducerNumber, task.ChunkNumber)
+		dfsPath := fmt.Sprintf("job_%s_reducer_%d_chunk_%d.txt", task.JobID, reducer.ReducerNumber, task.ChunkNumber)
 		
 		// Store the shuffle file in DFS
 		err := h.storeOutputFile(outputFile, dfsPath)
