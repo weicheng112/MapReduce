@@ -636,11 +636,11 @@ func (cm *ComputationManager) findSuitableNode(jobID string, isMapTask bool, chu
 				
 				for _, nodeID := range nodeIDs {
 					// Log the node ID from controller for debugging
-					log.Printf("Checking if node ID from controller exists: %s", nodeID)
+					// log.Printf("Checking if node ID from controller exists: %s", nodeID)
 					
 					// Try to find the node by its full ID
 					if node, exists := cm.nodes[nodeID]; exists {
-						log.Printf("Found node %s in compute nodes with %d active tasks", nodeID, node.ActiveTasks)
+						// log.Printf("Found node %s in compute nodes with %d active tasks", nodeID, node.ActiveTasks)
 						if node.ActiveTasks < minActiveTasks {
 							localNode = node
 							minActiveTasks = node.ActiveTasks

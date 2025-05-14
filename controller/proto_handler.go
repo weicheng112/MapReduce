@@ -193,8 +193,14 @@ func (c *Controller) handleStorageRequest(data []byte) ([]byte, error) {
 	log.Printf("  Chunk Size: %d bytes", request.ChunkSize)
 	log.Printf("  Number of Chunks: %d", numChunks)
 	log.Printf("  Chunk Placements:")
-	for chunkNum, nodes := range c.files[request.Filename].Chunks {
-		log.Printf("    Chunk %d: %v", chunkNum, nodes)
+	
+	// Check if the file has any chunks before iterating
+	if fileMetadata, exists := c.files[request.Filename]; exists && len(fileMetadata.Chunks) > 0 {
+		for chunkNum, nodes := range fileMetadata.Chunks {
+			log.Printf("    Chunk %d: %v", chunkNum, nodes)
+		}
+	} else {
+		log.Printf("    No chunks (empty file)")
 	}
 	
 	// Print node information
