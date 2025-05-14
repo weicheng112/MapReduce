@@ -532,7 +532,10 @@ func (h *MapReduceHandler) executeMapFunction(task *ActiveTask, inputFile string
 	}
 
 	// Create command using the task-specific binary
-	cmd := exec.Command(taskSpecificBinary, "map", inputFile)
+	// Pass the number of reducers as an argument
+	numReducers := len(task.Reducers)
+	cmd := exec.Command(taskSpecificBinary, "map", inputFile, strconv.Itoa(numReducers))
+	log.Printf("Executing command: %s map %s %d", taskSpecificBinary, inputFile, numReducers)
 	
 	// Create pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
