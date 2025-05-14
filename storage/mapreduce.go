@@ -1027,17 +1027,15 @@ func (h *MapReduceHandler) storeOutputFile(localFile, dfsFile string) error {
 			log.Printf("Attempting to store file directly on a random node")
 			
 			// Try to store on a random node (including this one)
-			nodes := []string{h.node.nodeID, "8001", "8002", "8003"}
+			// Use full IP addresses for nodes instead of just port numbers
+			nodes := []string{h.node.nodeID, "10.0.2.21:8001", "10.0.2.22:8002", "10.0.2.23:8003"}
 			for _, nodeID := range nodes {
 				if nodeID == h.node.nodeID {
 					continue  // Skip self, we'll try other nodes first
 				}
 				
-				// Get node address
+				// Use the full node address directly
 				nodeAddr := nodeID
-				if !strings.Contains(nodeAddr, ":") {
-					nodeAddr = "localhost:" + nodeAddr
-				}
 				
 				log.Printf("Trying to store file on node %s", nodeAddr)
 				
@@ -1148,12 +1146,11 @@ func (h *MapReduceHandler) storeOutputFile(localFile, dfsFile string) error {
 		}
 
 		// Otherwise, send to assigned node
-		// Get node address - similar to forwardChunk method
+		// Get node address - use the full address directly
 		nodeAddr := nodeID
-		if !strings.Contains(nodeAddr, ":") {
-			log.Printf("Warning: Node address %s does not contain a hostname, falling back to localhost", nodeAddr)
-			nodeAddr = "localhost:" + nodeAddr
-		}
+		
+		// Log the node address we're using
+		log.Printf("Using full node address: %s for chunk storage", nodeAddr)
 		
 		log.Printf("Connecting to storage node at %s for chunk storage", nodeAddr)
 		
