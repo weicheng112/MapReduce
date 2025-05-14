@@ -653,11 +653,11 @@ func (jm *JobManager) HandleComputeHeartbeat(heartbeat *pb.ComputeNodeHeartbeat)
 	// Use full address (hostname:port) as the node ID for consistent matching with controller
 	fullNodeID := heartbeat.NodeHostname + ":" + heartbeat.NodeId
 	
-	// Log the node registration with full ID
-	log.Printf("Registering compute node with full ID: %s", fullNodeID)
-	
 	node, exists := jm.cm.nodes[fullNodeID]
 	if !exists {
+		// Only log the node registration when a new node is registered
+		log.Printf("Registering new compute node with full ID: %s", fullNodeID)
+		
 		node = &ComputeNode{
 			ID:      fullNodeID,
 			Address: fullNodeID,
