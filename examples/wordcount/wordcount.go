@@ -9,16 +9,22 @@ import (
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: wordcount [map|reduce] [input_file] [output_files...]")
+		fmt.Println("Usage: wordcount [map|reduce] [input_file] [num_reducers] or [output_file] [shuffle_files...]")
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
-	inputFile := os.Args[2]
-
+	
 	switch command {
 	case "map":
-		runMap(inputFile)
+		if len(os.Args) < 4 {
+			fmt.Println("Usage: wordcount map [input_file] [num_reducers]")
+			os.Exit(1)
+		}
+		inputFile := os.Args[2]
+		numReducers := 3 // Default to 3 reducers
+		fmt.Sscanf(os.Args[3], "%d", &numReducers)
+		runMap(inputFile, numReducers)
 	case "reduce":
 		outputFile := os.Args[2]
 		shuffleFiles := os.Args[3:]
@@ -30,7 +36,7 @@ func main() {
 }
 
 // runMap reads the input file and emits (word, 1) pairs
-func runMap(inputFile string) {
+func runMap(inputFile string, numReducers int) {
 	// Open input file
 	file, err := os.Open(inputFile)
 	if err != nil {
@@ -56,7 +62,7 @@ func runMap(inputFile string) {
 			}
 			
 			// Determine reducer using simple hash
-			reducer := hash(word) % 3 // Assuming 3 reducers
+			reducer := hash(word) % uint32(numReducers)
 			
 			// Emit to stdout in format: reducer_num\tkey\tvalue
 			fmt.Printf("%d\t%s\t1\n", reducer, word)

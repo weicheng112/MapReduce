@@ -801,6 +801,15 @@ func (h *MapReduceHandler) executeReduceFunction(task *ActiveTask, shuffleFiles 
 
 // sendShuffleData sends shuffle data to reducers
 func (h *MapReduceHandler) sendShuffleData(task *ActiveTask) error {
+	// Check if we have any reducers
+	if len(task.Reducers) == 0 {
+		log.Printf("No reducers found for job %s", task.JobID)
+		return fmt.Errorf("no reducers found for job %s", task.JobID)
+	}
+	
+	// Log the number of reducers
+	log.Printf("Sending shuffle data to %d reducers", len(task.Reducers))
+	
 	// For each reducer
 	for i, reducer := range task.Reducers {
 		// Read output file
