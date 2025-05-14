@@ -315,8 +315,8 @@ func (cm *ComputationManager) handleComputeHeartbeat(data []byte) error {
 		return fmt.Errorf("failed to unmarshal compute heartbeat: %v", err)
 	}
 
-	log.Printf("Received heartbeat from compute node: %s",
-		heartbeat.NodeId)
+	// log.Printf("Received heartbeat from compute node: %s",
+	// 	heartbeat.NodeId)
 
 	// Handle compute heartbeat
 	if cm.jobManager == nil {
