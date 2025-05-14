@@ -1001,7 +1001,7 @@ func (h *MapReduceHandler) storeOutputFile(localFile, dfsFile string) error {
 	request := &pb.StorageRequest{
 		Filename:  dfsFile,
 		FileSize:  uint64(len(data)),
-		ChunkSize: 1024 * 1024, // 1MB chunks
+		ChunkSize: 64 * 1024 * 1024, // 1MB chunks
 	}
 
 	// Serialize request

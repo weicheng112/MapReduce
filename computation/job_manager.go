@@ -543,7 +543,7 @@ func (jm *JobManager) storeOutputFile(filename string, data []byte) error {
 	request := &pb.StorageRequest{
 		Filename:  filename,
 		FileSize:  uint64(len(data)),
-		ChunkSize: 1024 * 1024, // 1MB chunks
+		ChunkSize: 64 * 1024 * 1024, 
 	}
 	
 	// Serialize request
