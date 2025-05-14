@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -378,31 +377,52 @@ func (h *MapReduceHandler) executeReduceTask(task *ActiveTask, outputFile string
 		return
 	}
 
-	// Get all shuffle files
-	shuffleFiles, err := filepath.Glob(filepath.Join(taskDir, "mapper_*.txt"))
-	if err != nil {
-		log.Printf("Failed to get shuffle files: %v", err)
+	// Create a directory for local shuffle files
+	localShuffleDir := filepath.Join(taskDir, "local_shuffle_files")
+	if err := os.MkdirAll(localShuffleDir, 0755); err != nil {
+		log.Printf("Failed to create local shuffle directory: %v", err)
 		response.Success = false
-		response.Error = fmt.Sprintf("Failed to get shuffle files: %v", err)
+		response.Error = fmt.Sprintf("Failed to create local shuffle directory: %v", err)
 		h.sendReduceTaskResponse(response)
 		return
 	}
-
-	// Check if there are any shuffle files
-	if len(shuffleFiles) == 0 {
-		log.Printf("No shuffle files found for reducer %d in directory %s", task.ReducerNumber, taskDir)
-		// List all files in the directory to debug
-		files, _ := ioutil.ReadDir(taskDir)
-		for _, file := range files {
-			log.Printf("File in reducer directory: %s", file.Name())
+	
+	// Fetch shuffle files from DFS
+	shuffleFiles := []string{}
+	
+	// Get the number of chunks in the input file
+	// For now, we'll try a reasonable number of chunks (e.g., 100)
+	// In a production system, we would get this information from the job manager
+	maxChunks := 100
+	
+	log.Printf("Fetching shuffle files for reducer %d from DFS", task.ReducerNumber)
+	
+	// Try to fetch shuffle files from DFS for each chunk
+	for chunkNum := 0; chunkNum < maxChunks; chunkNum++ {
+		dfsPath := fmt.Sprintf("job_%s_reducer_%d/chunk_%d.txt", task.JobID, task.ReducerNumber, chunkNum)
+		
+		localPath, err := h.fetchFromDFS(dfsPath)
+		if err != nil {
+			// If we get an error, it might be because this chunk doesn't exist
+			// We'll just log it and continue
+			log.Printf("Could not fetch shuffle file for chunk %d: %v", chunkNum, err)
+			continue
 		}
+		
+		shuffleFiles = append(shuffleFiles, localPath)
+		log.Printf("Fetched shuffle file from DFS: %s -> %s", dfsPath, localPath)
+	}
+	
+	// Check if we found any shuffle files
+	if len(shuffleFiles) == 0 {
+		log.Printf("No shuffle files found for reducer %d", task.ReducerNumber)
 		response.Success = false
 		response.Error = fmt.Sprintf("No shuffle files found for reducer %d", task.ReducerNumber)
 		h.sendReduceTaskResponse(response)
 		return
 	}
 	
-	log.Printf("Found %d shuffle files for reducer %d: %v", len(shuffleFiles), task.ReducerNumber, shuffleFiles)
+	log.Printf("Found %d shuffle files for reducer %d", len(shuffleFiles), task.ReducerNumber)
 
 	// Create output file in a shared directory that the computation manager can access
 	// Use a directory structure that's predictable and accessible
@@ -785,40 +805,20 @@ func (h *MapReduceHandler) sendShuffleData(task *ActiveTask) error {
 	for i, reducer := range task.Reducers {
 		// Read output file
 		outputFile := task.OutputFiles[i]
-		data, err := ioutil.ReadFile(outputFile)
+		
+		// Create a DFS path for the shuffle file
+		// Use a predictable naming pattern based on chunk number instead of mapper ID
+		// This way reducers can find the files without knowing the exact mapper IDs
+		dfsPath := fmt.Sprintf("job_%s_reducer_%d/chunk_%d.txt", task.JobID, reducer.ReducerNumber, task.ChunkNumber)
+		
+		// Store the shuffle file in DFS
+		err := h.storeOutputFile(outputFile, dfsPath)
 		if err != nil {
-			return fmt.Errorf("failed to read output file: %v", err)
+			log.Printf("Failed to store shuffle file in DFS: %v", err)
+			return fmt.Errorf("failed to store shuffle file in DFS: %v", err)
 		}
-
-		// Parse key-value pairs
-		pairs := make([]*pb.KeyValuePair, 0)
-		scanner := bufio.NewScanner(bytes.NewReader(data))
-		for scanner.Scan() {
-			line := scanner.Text()
-			parts := strings.SplitN(line, "\t", 2)
-			if len(parts) != 2 {
-				log.Printf("Invalid line in output file: %s", line)
-				continue
-			}
-
-			pairs = append(pairs, &pb.KeyValuePair{
-				Key:   []byte(parts[0]),
-				Value: []byte(parts[1]),
-			})
-		}
-
-		// Create shuffle request
-		request := &pb.ShuffleRequest{
-			JobId:         task.JobID,
-			MapperId:      task.ID,
-			ReducerNumber: reducer.ReducerNumber,
-			KeyValuePairs: pairs,
-		}
-
-		// Send shuffle request to computation manager instead of directly to reducer
-		if err := h.sendShuffleRequest(h.node.computationAddr, request); err != nil {
-			return fmt.Errorf("failed to send shuffle request: %v", err)
-		}
+		
+		log.Printf("Stored shuffle file in DFS: %s", dfsPath)
 	}
 
 	return nil
@@ -1027,6 +1027,151 @@ func (h *MapReduceHandler) sendReduceTaskResponse(response *pb.ReduceTaskRespons
 }
 
 // storeOutputFile stores the output file in the DFS
+// fetchFromDFS retrieves a file from the DFS and stores it locally
+func (h *MapReduceHandler) fetchFromDFS(dfsPath string) (string, error) {
+	log.Printf("Fetching file from DFS: %s", dfsPath)
+	
+	// Connect to controller to get storage nodes that have the file
+	conn, err := net.Dial("tcp", h.node.controllerAddr)
+	if err != nil {
+		log.Printf("ERROR: Failed to connect to controller at %s: %v", h.node.controllerAddr, err)
+		return "", fmt.Errorf("failed to connect to controller: %v", err)
+	}
+	defer conn.Close()
+	
+	// Create retrieval request
+	request := &pb.RetrievalRequest{
+		Filename: dfsPath,
+	}
+	
+	// Serialize request
+	requestData, err := proto.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %v", err)
+	}
+	
+	// Send request
+	if err := common.WriteMessage(conn, common.MsgTypeRetrievalRequest, requestData); err != nil {
+		return "", fmt.Errorf("failed to send request: %v", err)
+	}
+	
+	// Read response
+	msgType, responseData, err := common.ReadMessage(conn)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %v", err)
+	}
+	
+	if msgType != common.MsgTypeRetrievalResponse {
+		return "", fmt.Errorf("unexpected message type: %d", msgType)
+	}
+	
+	// Parse response
+	response := &pb.RetrievalResponse{}
+	if err := proto.Unmarshal(responseData, response); err != nil {
+		return "", fmt.Errorf("failed to unmarshal response: %v", err)
+	}
+	
+	// Check if file exists
+	if len(response.Chunks) == 0 {
+		return "", fmt.Errorf("file not found in DFS: %s", dfsPath)
+	}
+	
+	// Create local file path
+	localDir := filepath.Join(h.tempDir, "dfs_cache")
+	if err := os.MkdirAll(localDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create cache directory: %v", err)
+	}
+	
+	localPath := filepath.Join(localDir, filepath.Base(dfsPath))
+	localFile, err := os.Create(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create local file: %v", err)
+	}
+	defer localFile.Close()
+	
+	// Retrieve each chunk and write to local file
+	for _, chunk := range response.Chunks {
+		// Try each storage node until successful
+		var chunkData []byte
+		var retrieveErr error
+		
+		for _, nodeAddr := range chunk.StorageNodes {
+			chunkData, retrieveErr = h.retrieveChunkFromNode(nodeAddr, dfsPath, int(chunk.ChunkNumber))
+			if retrieveErr == nil {
+				break
+			}
+			log.Printf("Failed to retrieve chunk %d from node %s: %v, trying next node",
+				chunk.ChunkNumber, nodeAddr, retrieveErr)
+		}
+		
+		if retrieveErr != nil {
+			return "", fmt.Errorf("failed to retrieve chunk %d: %v", chunk.ChunkNumber, retrieveErr)
+		}
+		
+		// Write chunk data to local file
+		if _, err := localFile.Write(chunkData); err != nil {
+			return "", fmt.Errorf("failed to write chunk data to local file: %v", err)
+		}
+	}
+	
+	log.Printf("Successfully fetched file from DFS: %s -> %s", dfsPath, localPath)
+	return localPath, nil
+}
+
+// retrieveChunkFromNode retrieves a chunk from a specific storage node
+func (h *MapReduceHandler) retrieveChunkFromNode(nodeAddr, filename string, chunkNum int) ([]byte, error) {
+	// Connect to storage node
+	conn, err := net.Dial("tcp", nodeAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to storage node: %v", err)
+	}
+	defer conn.Close()
+	
+	// Create chunk request
+	request := &pb.ChunkRetrieveRequest{
+		Filename:    filename,
+		ChunkNumber: uint32(chunkNum),
+	}
+	
+	// Serialize request
+	requestData, err := proto.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %v", err)
+	}
+	
+	// Send request
+	if err := common.WriteMessage(conn, common.MsgTypeChunkRetrieve, requestData); err != nil {
+		return nil, fmt.Errorf("failed to send request: %v", err)
+	}
+	
+	// Read response
+	msgType, responseData, err := common.ReadMessage(conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+	
+	if msgType != common.MsgTypeChunkRetrieve {
+		return nil, fmt.Errorf("unexpected message type: %d", msgType)
+	}
+	
+	// Parse response
+	response := &pb.ChunkRetrieveResponse{}
+	if err := proto.Unmarshal(responseData, response); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %v", err)
+	}
+	
+	// Check if chunk was found
+	if response.Error != "" {
+		return nil, fmt.Errorf("chunk not found: %s", response.Error)
+	}
+	
+	if response.Corrupted {
+		return nil, fmt.Errorf("chunk is corrupted")
+	}
+	
+	return response.Data, nil
+}
+
 func (h *MapReduceHandler) storeOutputFile(localFile, dfsFile string) error {
 	// Read file
 	data, err := ioutil.ReadFile(localFile)
