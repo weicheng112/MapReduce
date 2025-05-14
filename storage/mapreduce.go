@@ -91,8 +91,8 @@ func (h *MapReduceHandler) HandleMapTask(data []byte) ([]byte, error) {
 		Reducers:    request.Reducers,
 	}
 
-	// Save job binary to temporary file
-	binaryPath := filepath.Join(h.tempDir, fmt.Sprintf("job_%s.bin", request.JobId))
+	// Save job binary to temporary file with a unique name for each task
+	binaryPath := filepath.Join(h.tempDir, fmt.Sprintf("job_%s_task_%s.bin", request.JobId, request.TaskId))
 	if err := ioutil.WriteFile(binaryPath, request.JobBinary, 0755); err != nil {
 		return nil, fmt.Errorf("failed to write job binary: %v", err)
 	}
@@ -179,8 +179,8 @@ func (h *MapReduceHandler) HandleReduceTask(data []byte) ([]byte, error) {
 		JobBinary:     request.JobBinary,
 	}
 
-	// Save job binary to temporary file
-	binaryPath := filepath.Join(h.tempDir, fmt.Sprintf("job_%s.bin", request.JobId))
+	// Save job binary to temporary file with a unique name for each task
+	binaryPath := filepath.Join(h.tempDir, fmt.Sprintf("job_%s_task_%s.bin", request.JobId, request.TaskId))
 	if err := ioutil.WriteFile(binaryPath, request.JobBinary, 0755); err != nil {
 		return nil, fmt.Errorf("failed to write job binary: %v", err)
 	}
@@ -474,21 +474,65 @@ func (h *MapReduceHandler) executeMapFunction(task *ActiveTask, inputFile string
 	// For now, we'll use a simple approach: execute the job binary as a separate process
 	// In a more sophisticated implementation, we could use Go plugins
 
-	// Create command
-	cmd := exec.Command(task.BinaryPath, "map", inputFile)
+	log.Printf("Executing map function for task %s with binary %s", task.ID, task.BinaryPath)
+	log.Printf("Input file: %s", inputFile)
+
+	// Check if binary exists
+	if _, err := os.Stat(task.BinaryPath); os.IsNotExist(err) {
+		log.Printf("ERROR: Job binary does not exist at %s", task.BinaryPath)
+		return fmt.Errorf("job binary does not exist: %v", err)
+	}
+	
+	// Copy the job binary to a task-specific location to avoid "text file busy" errors
+	taskDir := filepath.Dir(inputFile)
+	taskSpecificBinary := filepath.Join(taskDir, fmt.Sprintf("job_binary_%s.bin", task.ID))
+	log.Printf("Copying job binary to task-specific location: %s", taskSpecificBinary)
+	
+	// Read the original binary
+	binaryData, err := ioutil.ReadFile(task.BinaryPath)
+	if err != nil {
+		log.Printf("ERROR: Failed to read job binary: %v", err)
+		return fmt.Errorf("failed to read job binary: %v", err)
+	}
+	
+	// Write to task-specific location
+	if err := ioutil.WriteFile(taskSpecificBinary, binaryData, 0755); err != nil {
+		log.Printf("ERROR: Failed to write task-specific binary: %v", err)
+		return fmt.Errorf("failed to write task-specific binary: %v", err)
+	}
+
+	// Add a delay to ensure the file is fully written and the file system has updated
+	log.Printf("Waiting for file system to stabilize...")
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify the binary exists and is executable
+	if err := verifyExecutable(taskSpecificBinary); err != nil {
+		log.Printf("ERROR: Binary is not executable: %v", err)
+		return fmt.Errorf("binary is not executable: %v", err)
+	}
+
+	// Create command using the task-specific binary
+	cmd := exec.Command(taskSpecificBinary, "map", inputFile)
 	
 	// Create pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		// Clean up task-specific binary
+		os.Remove(taskSpecificBinary)
 		return fmt.Errorf("failed to create stdout pipe: %v", err)
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		// Clean up task-specific binary
+		os.Remove(taskSpecificBinary)
 		return fmt.Errorf("failed to create stderr pipe: %v", err)
 	}
 
 	// Start command
+	log.Printf("Starting map command")
 	if err := cmd.Start(); err != nil {
+		// Clean up task-specific binary
+		os.Remove(taskSpecificBinary)
 		return fmt.Errorf("failed to start command: %v", err)
 	}
 
@@ -543,10 +587,24 @@ func (h *MapReduceHandler) executeMapFunction(task *ActiveTask, inputFile string
 	}
 
 	// Wait for command to finish
+	log.Printf("Waiting for map command to finish")
 	if err := cmd.Wait(); err != nil {
+		log.Printf("ERROR: Command failed: %v", err)
+		
+		// Clean up task-specific binary
+		os.Remove(taskSpecificBinary)
+		
 		return fmt.Errorf("command failed: %v", err)
 	}
 
+	// Clean up task-specific binary
+	if err := os.Remove(taskSpecificBinary); err != nil {
+		log.Printf("Warning: Failed to remove task-specific binary %s: %v", taskSpecificBinary, err)
+	} else {
+		log.Printf("Removed task-specific binary: %s", taskSpecificBinary)
+	}
+
+	log.Printf("Map function executed successfully")
 	return nil
 }
 
