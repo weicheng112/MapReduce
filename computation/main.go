@@ -59,6 +59,7 @@ type Job struct {
 	MapTasks       map[string]*Task // Map of task ID to task
 	ReduceTasks    map[string]*Task // Map of task ID to task
 	Reducers       []*ReducerInfo   // List of reducers
+	ChunkLocations map[uint32][]string // Map of chunk number to list of node IDs that have the chunk
 	StartTime      time.Time
 	EndTime        time.Time
 }
@@ -82,6 +83,7 @@ type Task struct {
 	ChunkNumber    uint32 // For map tasks
 	ReducerNumber  uint32 // For reduce tasks
 	Error          string
+	OutputFile     string // Path to the output file (for reduce tasks)
 }
 
 // NewComputationManager creates a new computation manager
@@ -604,10 +606,44 @@ func (cm *ComputationManager) findSuitableNode(jobID string, isMapTask bool, chu
 		return "", fmt.Errorf("no nodes available")
 	}
 
+	// Get job to access chunk locations
+	cm.jobsMutex.RLock()
+	job, exists := cm.jobs[jobID]
+	cm.jobsMutex.RUnlock()
+
+	if !exists {
+		return "", fmt.Errorf("job not found: %s", jobID)
+	}
+
 	// For map tasks, prefer nodes that have the chunk locally
 	if isMapTask {
-		// TODO: Implement data locality by checking which nodes have the chunk
-		// For now, just select the node with the fewest active tasks
+		// Check if we have chunk location information
+		if job.ChunkLocations != nil {
+			// Get nodes that have this chunk
+			if nodeIDs, ok := job.ChunkLocations[chunkNumber]; ok && len(nodeIDs) > 0 {
+				// Find the node with the lowest load among those that have the chunk
+				var localNode *ComputeNode
+				var minActiveTasks uint32 = ^uint32(0) // Max uint32 value
+
+				for _, nodeID := range nodeIDs {
+					if node, exists := cm.nodes[nodeID]; exists {
+						if node.ActiveTasks < minActiveTasks {
+							localNode = node
+							minActiveTasks = node.ActiveTasks
+						}
+					}
+				}
+
+				// If we found a suitable local node, return it
+				if localNode != nil {
+					log.Printf("Data locality: Assigning map task for chunk %d to node %s that has the data locally",
+						chunkNumber, localNode.ID)
+					return localNode.ID, nil
+				}
+			}
+		}
+		// If we couldn't find a node with local data, fall back to load-based scheduling
+		log.Printf("No data locality for chunk %d, falling back to load-based scheduling", chunkNumber)
 	}
 
 	// Select node with fewest active tasks
