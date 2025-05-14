@@ -71,3 +71,17 @@ For detailed instructions on running the system, see:
    ./client/client store sample_text.txt
    ./client/client mapreduce wordcount sample_text.txt wordcount_output.txt 3 true
    ```
+
+## MapReduce Examples
+
+### Word Count
+
+The Word Count example demonstrates a simple MapReduce job that counts the occurrences of each word in a text file.
+
+### Log Analyzer
+
+The Log Analyzer example demonstrates a more complex MapReduce workflow using two chained jobs:
+1. First job to count domain occurrences in log files
+2. Second job to sort domains by count
+
+For detailed instructions on using the Log Analyzer, see the [Log Analyzer Guide](docs/loganalyzer_guide.md).
