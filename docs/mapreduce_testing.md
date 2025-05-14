@@ -213,7 +213,7 @@ For distributed testing on the Orion cluster, you'll need to run components on d
 
 ### Step 1: Start the Controller
 
-On the first machine (e.g., orion01):
+On the first machine (orion01):
 
 ```bash
 ./controller/controller -port 8000
@@ -221,30 +221,55 @@ On the first machine (e.g., orion01):
 
 ### Step 2: Start the Computation Manager
 
-On the second machine (e.g., orion02):
+On a suitable machine (e.g., orion02):
 
 ```bash
-./computation/computation -port 8080 -data computation_data -controller orion01:8000
+./computation/computation -port 8080 -data /bigdata/students/$(whoami)/computation_data -controller orion01:8000
 ```
-
-Note: Replace `orion01` with the actual hostname or IP address of the machine running the controller.
 
 ### Step 3: Start Storage Nodes
 
-On different machines (e.g., orion03, orion04, orion05):
+Run storage nodes on multiple machines (orion02-orion12), each with a unique port and data directory:
 
 ```bash
+# On orion02
+./storage/storage -id 8001 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data1
+
 # On orion03
-./storage/storage -id 8001 -data storage/data1 -controller orion01:8000 -computation orion02:8080
+./storage/storage -id 8002 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data2
 
 # On orion04
-./storage/storage -id 8002 -data storage/data2 -controller orion01:8000 -computation orion02:8080
+./storage/storage -id 8003 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data3
 
 # On orion05
-./storage/storage -id 8003 -data storage/data3 -controller orion01:8000 -computation orion02:8080
+./storage/storage -id 8004 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data4
+
+# On orion06
+./storage/storage -id 8005 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data5
+
+# On orion07
+./storage/storage -id 8006 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data6
+
+# On orion08
+./storage/storage -id 8007 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data7
+
+# On orion09
+./storage/storage -id 8008 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data8
+
+# On orion10
+./storage/storage -id 8009 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data9
+
+# On orion11
+./storage/storage -id 8010 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data10
+
+# On orion12
+./storage/storage -id 8011 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data11
+
+# On orion12 (additional node)
+./storage/storage -id 8012 -controller orion01:8000 -computation orion02:8080 -data /bigdata/students/$(whoami)/data12
 ```
 
-Note: Replace `orion01` and `orion02` with the actual hostnames or IP addresses of the machines running the controller and computation manager.
+Note: The `$(whoami)` command will automatically use your username. You can replace it with your actual username if needed.
 
 ### Step 4: Compile the Example MapReduce Jobs
 
@@ -292,11 +317,11 @@ cat wordcount_results.txt
 
 1. **IP Address Configuration**: Always use the actual hostname or IP address of each machine when specifying controller and computation manager addresses. Do not use `localhost` when components are running on different machines.
 
-2. **Network Connectivity**: Ensure all machines can communicate with each other over the specified ports (8000 for controller, 8080 for computation manager, and 8001-8003 for storage nodes).
+2. **Network Connectivity**: Ensure all machines can communicate with each other over the specified ports (8000 for controller, 8080 for computation manager, and 8001-8012 for storage nodes).
 
 3. **Firewall Settings**: Make sure the necessary ports are open in any firewalls between the machines.
 
-4. **Data Directories**: Ensure the data directories specified for the computation manager and storage nodes exist and are writable.
+4. **Data Directories**: Ensure the data directories specified for the computation manager (`/bigdata/students/$(whoami)/computation_data`) and storage nodes (`/bigdata/students/$(whoami)/data1` through `/bigdata/students/$(whoami)/data12`) exist and are writable.
 
 5. **Shuffle Phase**: The system now correctly handles the shuffle phase by routing all shuffle data through the computation manager instead of directly between storage nodes and reducers.
 
